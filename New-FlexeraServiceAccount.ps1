@@ -331,6 +331,7 @@ function Populate-RoleListBoxes {
         }
     }
 
+    $script:LvAvailableRoles.BeginUpdate()
     $script:LvAvailableRoles.Items.Clear()
     foreach ($r in ($Roles | Sort-Object name)) {
         $item = New-Object System.Windows.Forms.ListViewItem((Safe-Str $r.name))
@@ -339,7 +340,13 @@ function Populate-RoleListBoxes {
         $null = $item.SubItems.Add((Safe-Str $r.description))
         $null = $script:LvAvailableRoles.Items.Add($item)
     }
-    foreach ($col in $script:LvAvailableRoles.Columns) { $col.Width = -1 }
+    # Fixed widths prevent the Description column expanding to thousands of pixels
+    # which causes ListView to clip rows instead of scrolling vertically
+    $script:LvAvailableRoles.Columns[0].Width = 160   # Role Name
+    $script:LvAvailableRoles.Columns[1].Width = 160   # Display Name
+    $script:LvAvailableRoles.Columns[2].Width = 110   # Category
+    $script:LvAvailableRoles.Columns[3].Width = 340   # Description
+    $script:LvAvailableRoles.EndUpdate()
 }
 
 #endregion
