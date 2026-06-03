@@ -116,13 +116,23 @@ function Unwrap-ApiResponse {
 }
 
 function Get-AvailableRoles {
-    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/roles?view=extended"
-    Write-Log INFO "GET  | $uri"
+    $pageSize = 100
+    $offset   = 0
+    $all      = @()
+
+    Write-Log INFO "GET  | Fetching all roles (paginated, page size $pageSize)..."
     try {
-        $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
-        $items = Unwrap-ApiResponse $resp
-        Write-Log SUCCESS "GET  | Roles retrieved: $($items.Count) roles."
-        return $items
+        do {
+            $uri  = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/roles?view=extended&limit=$pageSize&offset=$offset"
+            Write-Log INFO "GET  | $uri"
+            $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+            $page  = Unwrap-ApiResponse $resp
+            $all  += $page
+            $offset += $pageSize
+        } while ($page.Count -eq $pageSize)
+
+        Write-Log SUCCESS "GET  | Roles retrieved: $($all.Count) total."
+        return $all
     }
     catch {
         $msg = Get-ApiErrorMessage $_
