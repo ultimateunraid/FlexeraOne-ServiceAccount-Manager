@@ -107,14 +107,22 @@ function Invoke-Connect {
     }
 }
 
+function Unwrap-ApiResponse {
+    param ($Response)
+    # Flexera One endpoints return either a plain array or {"values":[...]}
+    if ($Response -is [array]) { return $Response }
+    if ($null -ne $Response.values) { return $Response.values }
+    return @($Response)
+}
+
 function Get-AvailableRoles {
     $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/roles"
     Write-Log INFO "GET  | $uri"
     try {
-        $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
-        Write-Log SUCCESS "GET  | Roles retrieved: $($resp.values.Count) roles."
-        Write-Log INFO "GET  | Raw roles response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
-        return $resp.values
+        $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+        $items = Unwrap-ApiResponse $resp
+        Write-Log SUCCESS "GET  | Roles retrieved: $($items.Count) roles."
+        return $items
     }
     catch {
         $msg = Get-ApiErrorMessage $_
@@ -187,18 +195,21 @@ function Invoke-AssignRoles {
 function Get-AssignedRoles {
     param ([string]$SubjectRef)
 
-    $filter = [System.Uri]::EscapeDataString("subjectRef eq '$SubjectRef'")
-    $uri    = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/access-rules?filter=$filter&view=extended"
+    # OData filter on subjectRef fails with 400 when the value contains '#' or ':'
+    # Fetch all access rules and filter client-side instead
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/access-rules?view=extended"
 
-    Write-Log INFO "GET  | $uri"
+    Write-Log INFO "GET  | $uri (filtering client-side for '$SubjectRef')"
     try {
-        $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
-        Write-Log SUCCESS "GET  | $($resp.values.Count) role(s) found for '$SubjectRef'."
-        return $resp.values
+        $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+        $all   = Unwrap-ApiResponse $resp
+        $match = @($all | Where-Object { $_.subject.ref -eq $SubjectRef })
+        Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$SubjectRef' (of $($all.Count) total rules)."
+        return $match
     }
     catch {
         $msg = Get-ApiErrorMessage $_
-        Write-Log ERROR "GET  | Failed to retrieve roles for '$SubjectRef': $msg"
+        Write-Log ERROR "GET  | Failed to retrieve access rules: $msg"
         throw $msg
     }
 }
@@ -207,10 +218,11 @@ function Get-ServiceAccounts {
     $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts"
     Write-Log INFO "GET  | $uri"
     try {
-        $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
-        Write-Log SUCCESS "GET  | $($resp.values.Count) service account(s) retrieved."
+        $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+        $items = Unwrap-ApiResponse $resp
+        Write-Log SUCCESS "GET  | $($items.Count) service account(s) retrieved."
         Write-Log INFO "GET  | Raw SA list response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
-        return $resp.values
+        return $items
     }
     catch {
         $msg = Get-ApiErrorMessage $_
@@ -505,11 +517,19 @@ $btnDeleteSelected          = New-Button 'Delete Selected' 390 10 130 26
 $btnDeleteSelected.BackColor= [System.Drawing.Color]::FromArgb(180, 40, 40)
 $btnDeleteSelected.Enabled  = $false
 
-$script:LvManageAccounts = New-ListView 10 46 710 442 @('Name','ID','Subject Ref','Created By')
-$script:LvManageAccounts.MultiSelect = $true
+$lblManageCount          = New-Object System.Windows.Forms.Label
+$lblManageCount.Location = New-Object System.Drawing.Point(535, 14)
+$lblManageCount.Size     = New-Object System.Drawing.Size(185, 18)
+$lblManageCount.Font     = New-Object System.Drawing.Font('Segoe UI', 8)
+$lblManageCount.ForeColor= [System.Drawing.Color]::Gray
+$lblManageCount.Text     = ''
+
+$script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','ID','Subject Ref','Created By')
+$script:LvManageAccounts.MultiSelect    = $true
+$script:LvManageAccounts.HideSelection = $false
 
 $tabManage.Controls.AddRange(@(
-    $btnLoadAccounts, $txtManageFilter, $btnDeleteSelected,
+    $btnLoadAccounts, $txtManageFilter, $btnDeleteSelected, $lblManageCount,
     $script:LvManageAccounts
 ))
 $tabs.TabPages.Add($tabManage)
@@ -841,13 +861,13 @@ $btnLoadAccounts.Add_Click({
         foreach ($sa in $script:AllServiceAccounts) {
             $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
             $null = $row.SubItems.Add((Safe-Str $sa.id))
-            $null = $row.SubItems.Add((Safe-Str $sa.subjectRef))
-            $null = $row.SubItems.Add((Safe-Str $sa.description))
-            $null = $row.SubItems.Add((Safe-Str $sa.createdAt))
+            $null = $row.SubItems.Add((Safe-Str $sa.ref))
+            $null = $row.SubItems.Add((Safe-Str $sa.createdBy))
             $row.Tag = $sa
             $null = $script:LvManageAccounts.Items.Add($row)
         }
-        foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -2 }
+        foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -1 }
+        $lblManageCount.Text = "$($script:AllServiceAccounts.Count) account(s) loaded."
 
         Set-Status "$($script:AllServiceAccounts.Count) service account(s) loaded." 'Green'
     }
