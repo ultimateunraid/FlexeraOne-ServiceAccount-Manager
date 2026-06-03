@@ -116,7 +116,7 @@ function Unwrap-ApiResponse {
 }
 
 function Get-AvailableRoles {
-    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/roles"
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/roles?view=extended"
     Write-Log INFO "GET  | $uri"
     try {
         $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
@@ -328,7 +328,7 @@ function Populate-RoleListBoxes {
         $null = $item.SubItems.Add((Safe-Str $r.description))
         $null = $script:LvAvailableRoles.Items.Add($item)
     }
-    foreach ($col in $script:LvAvailableRoles.Columns) { $col.Width = -2 }
+    foreach ($col in $script:LvAvailableRoles.Columns) { $col.Width = -1 }
 }
 
 #endregion
