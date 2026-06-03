@@ -113,6 +113,7 @@ function Get-AvailableRoles {
     try {
         $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
         Write-Log SUCCESS "GET  | Roles retrieved: $($resp.values.Count) roles."
+        Write-Log INFO "GET  | Raw roles response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
         return $resp.values
     }
     catch {
@@ -135,6 +136,7 @@ function New-ServiceAccount {
             -Headers $script:Headers `
             -Body ($body | ConvertTo-Json -Depth 3)
         Write-Log SUCCESS "POST | Service account created. ID=$($resp.id) SubjectRef=$($resp.subjectRef)"
+        Write-Log INFO "POST | Raw response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
         return $resp
     }
     catch {
@@ -187,6 +189,39 @@ function Get-AssignedRoles {
     catch {
         $msg = Get-ApiErrorMessage $_
         Write-Log ERROR "GET  | Failed to retrieve roles for '$SubjectRef': $msg"
+        throw $msg
+    }
+}
+
+function Get-ServiceAccounts {
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts"
+    Write-Log INFO "GET  | $uri"
+    try {
+        $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+        Write-Log SUCCESS "GET  | $($resp.values.Count) service account(s) retrieved."
+        Write-Log INFO "GET  | Raw SA list response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
+        return $resp.values
+    }
+    catch {
+        $msg = Get-ApiErrorMessage $_
+        Write-Log ERROR "GET  | Failed to retrieve service accounts: $msg"
+        throw $msg
+    }
+}
+
+function Remove-ServiceAccount {
+    param ([string]$AccountId, [string]$AccountName)
+
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts/$AccountId"
+    Write-Log INFO "DELETE | $uri | Name='$AccountName' ID='$AccountId'"
+    try {
+        $null = Invoke-RestMethod -Method Delete -Uri $uri -Headers $script:Headers
+        Write-Log SUCCESS "DELETE | Service account '$AccountName' ($AccountId) deleted."
+        return $true
+    }
+    catch {
+        $msg = Get-ApiErrorMessage $_
+        Write-Log ERROR "DELETE | Failed to delete '$AccountName' ($AccountId): $msg"
         throw $msg
     }
 }
@@ -443,7 +478,34 @@ $tabBrowse.Controls.AddRange(@($lblBrowseHint, $script:LvAvailableRoles))
 $tabs.TabPages.Add($tabBrowse)
 
 #--------------------------------------------
-# TAB 5: Log Viewer
+# TAB 5: Manage Accounts
+#--------------------------------------------
+$tabManage      = New-Object System.Windows.Forms.TabPage
+$tabManage.Text = '  Manage Accounts  '
+
+$btnLoadAccounts          = New-Button 'Load Accounts' 10 10 130 26
+$txtManageFilter          = New-Object System.Windows.Forms.TextBox
+$txtManageFilter.Location = New-Object System.Drawing.Point(155, 13)
+$txtManageFilter.Size     = New-Object System.Drawing.Size(220, 22)
+$txtManageFilter.Font     = $FONT_LABEL
+$txtManageFilter.Text     = 'Filter by name...'
+$txtManageFilter.ForeColor= [System.Drawing.Color]::Gray
+
+$btnDeleteSelected          = New-Button 'Delete Selected' 390 10 130 26
+$btnDeleteSelected.BackColor= [System.Drawing.Color]::FromArgb(180, 40, 40)
+$btnDeleteSelected.Enabled  = $false
+
+$script:LvManageAccounts = New-ListView 10 46 710 442 @('Name','ID','Subject Ref','Description','Created At')
+$script:LvManageAccounts.MultiSelect = $true
+
+$tabManage.Controls.AddRange(@(
+    $btnLoadAccounts, $txtManageFilter, $btnDeleteSelected,
+    $script:LvManageAccounts
+))
+$tabs.TabPages.Add($tabManage)
+
+#--------------------------------------------
+# TAB 6: Log Viewer
 #--------------------------------------------
 $tabLog      = New-Object System.Windows.Forms.TabPage
 $tabLog.Text = '  Log  '
@@ -703,6 +765,145 @@ $btnView.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("Error: $_", 'Request Failed',
             [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
+})
+
+# Manage Accounts — filter placeholder behaviour
+$txtManageFilter.Add_GotFocus({
+    if ($txtManageFilter.Text -eq 'Filter by name...') {
+        $txtManageFilter.Text      = ''
+        $txtManageFilter.ForeColor = [System.Drawing.Color]::Black
+    }
+})
+$txtManageFilter.Add_LostFocus({
+    if ($txtManageFilter.Text -eq '') {
+        $txtManageFilter.Text      = 'Filter by name...'
+        $txtManageFilter.ForeColor = [System.Drawing.Color]::Gray
+    }
+})
+
+# Filter list as user types
+$txtManageFilter.Add_TextChanged({
+    $filter = $txtManageFilter.Text.Trim()
+    if ($filter -eq 'Filter by name...' -or $filter -eq '') { return }
+    if (-not $script:AllServiceAccounts) { return }
+
+    $script:LvManageAccounts.Items.Clear()
+    $filtered = $script:AllServiceAccounts | Where-Object {
+        (Safe-Str $_.name) -like "*$filter*"
+    }
+    foreach ($sa in $filtered) {
+        $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
+        $null = $row.SubItems.Add((Safe-Str $sa.id))
+        $null = $row.SubItems.Add((Safe-Str $sa.subjectRef))
+        $null = $row.SubItems.Add((Safe-Str $sa.description))
+        $null = $row.SubItems.Add((Safe-Str $sa.createdAt))
+        $row.Tag = $sa
+        $null = $script:LvManageAccounts.Items.Add($row)
+    }
+    foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -2 }
+})
+
+# Enable/disable Delete button based on selection
+$script:LvManageAccounts.Add_SelectedIndexChanged({
+    $btnDeleteSelected.Enabled = ($script:LvManageAccounts.SelectedItems.Count -gt 0)
+})
+
+# Load Accounts
+$btnLoadAccounts.Add_Click({
+    if (-not $script:AccessToken) {
+        [System.Windows.Forms.MessageBox]::Show('Please connect first.', 'Not Connected',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    Write-Log INFO 'Load Accounts button clicked.'
+    Set-Status 'Loading service accounts...' 'Gray'
+    $script:LvManageAccounts.Items.Clear()
+    $btnDeleteSelected.Enabled = $false
+
+    try {
+        $script:AllServiceAccounts = Get-ServiceAccounts
+
+        if (-not $script:AllServiceAccounts -or $script:AllServiceAccounts.Count -eq 0) {
+            Set-Status 'No service accounts found in this org.' 'DarkOrange'
+            return
+        }
+
+        foreach ($sa in $script:AllServiceAccounts) {
+            $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
+            $null = $row.SubItems.Add((Safe-Str $sa.id))
+            $null = $row.SubItems.Add((Safe-Str $sa.subjectRef))
+            $null = $row.SubItems.Add((Safe-Str $sa.description))
+            $null = $row.SubItems.Add((Safe-Str $sa.createdAt))
+            $row.Tag = $sa
+            $null = $script:LvManageAccounts.Items.Add($row)
+        }
+        foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -2 }
+
+        Set-Status "$($script:AllServiceAccounts.Count) service account(s) loaded." 'Green'
+    }
+    catch {
+        Set-Status "Failed to load accounts: $_" 'Red'
+        [System.Windows.Forms.MessageBox]::Show("Error: $_", 'Load Failed',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+})
+
+# Delete Selected
+$btnDeleteSelected.Add_Click({
+    $selected = @($script:LvManageAccounts.SelectedItems)
+    if ($selected.Count -eq 0) { return }
+
+    $names = ($selected | ForEach-Object { $_.Text }) -join "`n  - "
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "Permanently delete $($selected.Count) service account(s)?`n`n  - $names`n`nThis cannot be undone.",
+        'Confirm Delete',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-Log INFO 'Delete cancelled by user.'
+        return
+    }
+
+    Write-Log INFO "Delete confirmed for $($selected.Count) account(s)."
+    $deleted = 0
+    $failed  = 0
+
+    foreach ($item in $selected) {
+        $sa = $item.Tag
+        $id   = Safe-Str $sa.id
+        $name = Safe-Str $sa.name
+
+        # Fall back to text columns if Tag properties are empty (field name mismatch)
+        if ($id -eq '') { $id = $item.SubItems[1].Text }
+
+        try {
+            Remove-ServiceAccount -AccountId $id -AccountName $name
+            $script:LvManageAccounts.Items.Remove($item)
+            $deleted++
+        }
+        catch {
+            $failed++
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to delete '$name': $_", 'Delete Error',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    }
+
+    # Refresh cached list to match UI
+    $script:AllServiceAccounts = $script:AllServiceAccounts | Where-Object {
+        $script:LvManageAccounts.Items | ForEach-Object { $_.Tag } | Where-Object { $_ -eq $_ }
+    }
+
+    if ($failed -eq 0) {
+        Set-Status "$deleted account(s) deleted successfully." 'Green'
+    } else {
+        Set-Status "$deleted deleted, $failed failed. Check log for details." 'DarkOrange'
+    }
+    $btnDeleteSelected.Enabled = $false
 })
 
 # Log tab buttons
