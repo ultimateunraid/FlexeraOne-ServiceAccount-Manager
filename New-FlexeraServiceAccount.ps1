@@ -338,18 +338,23 @@ function Populate-RoleListBoxes {
 $script:Form = New-Object System.Windows.Forms.Form
 $script:Form.Text            = 'Flexera One — Service Account Manager'
 $script:Form.Size            = New-Object System.Drawing.Size(780, 700)
+$script:Form.MinimumSize     = New-Object System.Drawing.Size(780, 600)
 $script:Form.StartPosition   = 'CenterScreen'
-$script:Form.FormBorderStyle = 'FixedSingle'
-$script:Form.MaximizeBox     = $false
+$script:Form.FormBorderStyle = 'Sizable'
 $script:Form.BackColor       = $COLOR_PANEL
 $script:Form.Font            = $FONT_LABEL
 
 # ---- Connection GroupBox ----
+$AnchorTLR  = [System.Windows.Forms.AnchorStyles]::Top  -bor [System.Windows.Forms.AnchorStyles]::Left  -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorAll  = [System.Windows.Forms.AnchorStyles]::Top  -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$AnchorBLR  = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
 $gbConn          = New-Object System.Windows.Forms.GroupBox
 $gbConn.Text     = 'Connection'
 $gbConn.Location = New-Object System.Drawing.Point(10, 8)
 $gbConn.Size     = New-Object System.Drawing.Size(744, 80)
 $gbConn.Font     = $FONT_BOLD
+$gbConn.Anchor   = $AnchorTLR
 
 $lblOrg   = New-Label 'Org ID:'        12  22  60
 $txtOrgId = New-TextBox                75  20  120
@@ -384,6 +389,7 @@ $tabs          = New-Object System.Windows.Forms.TabControl
 $tabs.Location = New-Object System.Drawing.Point(10, 96)
 $tabs.Size     = New-Object System.Drawing.Size(744, 538)
 $tabs.Font     = $FONT_LABEL
+$tabs.Anchor   = $AnchorAll
 $script:Form.Controls.Add($tabs)
 
 #--------------------------------------------
@@ -416,10 +422,12 @@ $script:LbCreateRoles.Location       = New-Object System.Drawing.Point(125, 136)
 $script:LbCreateRoles.Size           = New-Object System.Drawing.Size(340, 180)
 $script:LbCreateRoles.SelectionMode  = 'MultiExtended'
 $script:LbCreateRoles.Font           = $FONT_LABEL
+$script:LbCreateRoles.Anchor         = $AnchorTLR
 $null = $script:LbCreateRoles.Items.Add('Connect first to load available roles')
 
 $btnCreate             = New-Button 'Create Account' 125 328 140
 $script:LvCreateResult = New-ListView 10 368 710 120 @('Field','Value')
+$script:LvCreateResult.Anchor        = $AnchorBLR
 
 $tabCreate.Controls.AddRange(@(
     $lblCName, $txtCName, $lblCDesc, $txtCDesc,
@@ -455,10 +463,12 @@ $script:LbAssignRoles.Location      = New-Object System.Drawing.Point(125, 104)
 $script:LbAssignRoles.Size          = New-Object System.Drawing.Size(340, 190)
 $script:LbAssignRoles.SelectionMode = 'MultiExtended'
 $script:LbAssignRoles.Font          = $FONT_LABEL
+$script:LbAssignRoles.Anchor        = $AnchorTLR
 $null = $script:LbAssignRoles.Items.Add('Connect first to load available roles')
 
 $btnAssign             = New-Button 'Assign Roles' 125 306 120
 $script:LvAssignResult = New-ListView 10 344 710 140 @('Role','Status')
+$script:LvAssignResult.Anchor       = $AnchorBLR
 
 $tabAssign.Controls.AddRange(@(
     $lblASubj, $txtASubj, $lblAScopeRef, $txtAScopeRef,
@@ -477,6 +487,7 @@ $lblVSubj            = New-Label 'Subject Ref: *' 10 16 110
 $txtVSubj            = New-TextBox 125 14 400
 $btnView             = New-Button 'Get Roles' 540 12 110
 $script:LvViewResult = New-ListView 10 52 710 436 @('Role Name','Display Name','Category','Assigned At')
+$script:LvViewResult.Anchor = $AnchorAll
 
 $tabView.Controls.AddRange(@($lblVSubj, $txtVSubj, $btnView, $script:LvViewResult))
 $tabs.TabPages.Add($tabView)
@@ -495,6 +506,7 @@ $lblBrowseHint.Font     = New-Object System.Drawing.Font('Segoe UI', 8)
 $lblBrowseHint.ForeColor= [System.Drawing.Color]::Gray
 
 $script:LvAvailableRoles = New-ListView 10 32 710 460 @('Role Name','Display Name','Category','Description')
+$script:LvAvailableRoles.Anchor = $AnchorAll
 
 $tabBrowse.Controls.AddRange(@($lblBrowseHint, $script:LvAvailableRoles))
 $tabs.TabPages.Add($tabBrowse)
@@ -526,7 +538,21 @@ $lblManageCount.Text     = ''
 
 $script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','ID','Subject Ref','Created By')
 $script:LvManageAccounts.MultiSelect    = $true
-$script:LvManageAccounts.HideSelection = $false
+$script:LvManageAccounts.HideSelection  = $false
+$script:LvManageAccounts.Anchor         = $AnchorAll
+
+# Right-click context menu
+$ctxManage      = New-Object System.Windows.Forms.ContextMenuStrip
+$mnuCopyRef     = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyRef.Text= 'Copy Subject Ref'
+$mnuCopyId      = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyId.Text = 'Copy ID'
+$mnuCopyName    = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyName.Text = 'Copy Name'
+$null = $ctxManage.Items.Add($mnuCopyRef)
+$null = $ctxManage.Items.Add($mnuCopyId)
+$null = $ctxManage.Items.Add($mnuCopyName)
+$script:LvManageAccounts.ContextMenuStrip = $ctxManage
 
 $tabManage.Controls.AddRange(@(
     $btnLoadAccounts, $txtManageFilter, $btnDeleteSelected, $lblManageCount,
@@ -549,14 +575,15 @@ $lblLogPath.Font        = New-Object System.Drawing.Font('Segoe UI', 8)
 $lblLogPath.ForeColor   = [System.Drawing.Color]::Gray
 $lblLogPath.Text        = $script:LogFile
 
-$script:TxtLog          = New-Object System.Windows.Forms.RichTextBox
-$script:TxtLog.Location = New-Object System.Drawing.Point(10, 44)
-$script:TxtLog.Size     = New-Object System.Drawing.Size(710, 448)
-$script:TxtLog.Font     = New-Object System.Drawing.Font('Consolas', 8)
-$script:TxtLog.ReadOnly = $true
-$script:TxtLog.BackColor= [System.Drawing.Color]::FromArgb(20, 20, 20)
-$script:TxtLog.ForeColor= [System.Drawing.Color]::LightGray
+$script:TxtLog            = New-Object System.Windows.Forms.RichTextBox
+$script:TxtLog.Location   = New-Object System.Drawing.Point(10, 44)
+$script:TxtLog.Size       = New-Object System.Drawing.Size(710, 448)
+$script:TxtLog.Font       = New-Object System.Drawing.Font('Consolas', 8)
+$script:TxtLog.ReadOnly   = $true
+$script:TxtLog.BackColor  = [System.Drawing.Color]::FromArgb(20, 20, 20)
+$script:TxtLog.ForeColor  = [System.Drawing.Color]::LightGray
 $script:TxtLog.ScrollBars = 'Vertical'
+$script:TxtLog.Anchor     = $AnchorAll
 
 $tabLog.Controls.AddRange(@($btnRefreshLog, $btnOpenLogFolder, $lblLogPath, $script:TxtLog))
 $tabs.TabPages.Add($tabLog)
@@ -932,6 +959,41 @@ $btnDeleteSelected.Add_Click({
         Set-Status "$deleted deleted, $failed failed. Check log for details." 'DarkOrange'
     }
     $btnDeleteSelected.Enabled = $false
+})
+
+# Manage Accounts context menu
+$ctxManage.Add_Opening({
+    $hasSelection = ($script:LvManageAccounts.SelectedItems.Count -gt 0)
+    $mnuCopyRef.Enabled  = $hasSelection
+    $mnuCopyId.Enabled   = $hasSelection
+    $mnuCopyName.Enabled = $hasSelection
+})
+
+$mnuCopyRef.Add_Click({
+    $item = $script:LvManageAccounts.SelectedItems[0]
+    if ($item) {
+        Set-Clipboard $item.SubItems[2].Text
+        Set-Status "Subject Ref copied: $($item.SubItems[2].Text)" 'Green'
+        Write-Log INFO "Copied Subject Ref to clipboard: $($item.SubItems[2].Text)"
+    }
+})
+
+$mnuCopyId.Add_Click({
+    $item = $script:LvManageAccounts.SelectedItems[0]
+    if ($item) {
+        Set-Clipboard $item.SubItems[1].Text
+        Set-Status "ID copied: $($item.SubItems[1].Text)" 'Green'
+        Write-Log INFO "Copied ID to clipboard: $($item.SubItems[1].Text)"
+    }
+})
+
+$mnuCopyName.Add_Click({
+    $item = $script:LvManageAccounts.SelectedItems[0]
+    if ($item) {
+        Set-Clipboard $item.Text
+        Set-Status "Name copied: $($item.Text)" 'Green'
+        Write-Log INFO "Copied Name to clipboard: $($item.Text)"
+    }
 })
 
 # Log tab buttons
