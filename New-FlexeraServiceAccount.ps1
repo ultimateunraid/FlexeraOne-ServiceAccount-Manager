@@ -419,8 +419,14 @@ $btnConnect.Add_Click({
     $region = $cbRegion.SelectedItem.ToString()
     $token  = $txtToken.Text   # plain text from masked textbox
 
-    if ($orgId -eq '' -or $token -eq '') {
-        [System.Windows.Forms.MessageBox]::Show('Org ID and Refresh Token are required.', 'Validation',
+    if ($token -eq '') {
+        [System.Windows.Forms.MessageBox]::Show('Refresh Token is required.', 'Validation',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+    if ($orgId -eq '') {
+        [System.Windows.Forms.MessageBox]::Show('Org ID is required for API calls after connecting.', 'Validation',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning)
         return
@@ -438,6 +444,11 @@ $btnConnect.Add_Click({
         Set-Status "Connected to org $orgId ($region)." 'Green'
         $script:ConnectIndicator.Text      = [char]0x2714 + ' Connected'
         $script:ConnectIndicator.ForeColor = [System.Drawing.Color]::Green
+
+        # Auto-derive Scope Ref from Org ID — still editable if needed
+        $derivedScope = "global/orgs/$orgId"
+        $txtCScopeRef.Text = $derivedScope
+        $txtAScopeRef.Text = $derivedScope
 
         $roles = Get-AvailableRoles
         if ($roles) {
