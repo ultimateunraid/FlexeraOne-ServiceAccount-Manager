@@ -132,12 +132,22 @@ function New-ServiceAccount {
 
     Write-Log INFO "POST | $uri | Name='$Name' Description='$Description'"
     try {
-        $resp = Invoke-RestMethod -Method Post -Uri $uri `
+        # API returns empty body on success — follow up with GET to retrieve details
+        $null = Invoke-RestMethod -Method Post -Uri $uri `
             -Headers $script:Headers `
             -Body ($body | ConvertTo-Json -Depth 3)
-        Write-Log SUCCESS "POST | Service account created. ID=$($resp.id) SubjectRef=$($resp.subjectRef)"
-        Write-Log INFO "POST | Raw response: $($resp | ConvertTo-Json -Depth 5 -Compress)"
-        return $resp
+        Write-Log SUCCESS "POST | Service account '$Name' created (empty response body — fetching details)."
+
+        $accounts = Get-ServiceAccounts
+        $created  = $accounts | Where-Object { $_.name -eq $Name } |
+                    Sort-Object id -Descending | Select-Object -First 1
+
+        if ($created) {
+            Write-Log SUCCESS "POST | Retrieved created account. ID=$($created.id) Ref=$($created.ref)"
+        } else {
+            Write-Log WARN "POST | Could not find '$Name' in account list after creation."
+        }
+        return $created
     }
     catch {
         $msg = Get-ApiErrorMessage $_
@@ -495,7 +505,7 @@ $btnDeleteSelected          = New-Button 'Delete Selected' 390 10 130 26
 $btnDeleteSelected.BackColor= [System.Drawing.Color]::FromArgb(180, 40, 40)
 $btnDeleteSelected.Enabled  = $false
 
-$script:LvManageAccounts = New-ListView 10 46 710 442 @('Name','ID','Subject Ref','Description','Created At')
+$script:LvManageAccounts = New-ListView 10 46 710 442 @('Name','ID','Subject Ref','Created By')
 $script:LvManageAccounts.MultiSelect = $true
 
 $tabManage.Controls.AddRange(@(
@@ -648,8 +658,8 @@ $btnCreate.Add_Click({
         $fields = [ordered]@{
             Name          = Safe-Str $created.name
             ID            = Safe-Str $created.id
-            'Subject Ref' = Safe-Str $created.subjectRef
-            'Created At'  = Safe-Str $created.createdAt
+            'Subject Ref' = Safe-Str $created.ref
+            'Created By'  = Safe-Str $created.createdBy
         }
         foreach ($key in $fields.Keys) {
             $row = New-Object System.Windows.Forms.ListViewItem($key)
@@ -660,7 +670,7 @@ $btnCreate.Add_Click({
 
         if ($selectedRoles.Count -gt 0) {
             Set-Status 'Account created. Assigning roles...' 'Gray'
-            $roleResults = Invoke-AssignRoles -SubjectRef $created.subjectRef `
+            $roleResults = Invoke-AssignRoles -SubjectRef $created.ref `
                 -Roles $selectedRoles -ScopeRef $scope
             $failed = @($roleResults | Where-Object { $_.Status -ne 'Assigned' })
             if ($failed.Count -eq 0) {
@@ -794,9 +804,8 @@ $txtManageFilter.Add_TextChanged({
     foreach ($sa in $filtered) {
         $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
         $null = $row.SubItems.Add((Safe-Str $sa.id))
-        $null = $row.SubItems.Add((Safe-Str $sa.subjectRef))
-        $null = $row.SubItems.Add((Safe-Str $sa.description))
-        $null = $row.SubItems.Add((Safe-Str $sa.createdAt))
+        $null = $row.SubItems.Add((Safe-Str $sa.ref))
+        $null = $row.SubItems.Add((Safe-Str $sa.createdBy))
         $row.Tag = $sa
         $null = $script:LvManageAccounts.Items.Add($row)
     }
@@ -893,10 +902,9 @@ $btnDeleteSelected.Add_Click({
         }
     }
 
-    # Refresh cached list to match UI
-    $script:AllServiceAccounts = $script:AllServiceAccounts | Where-Object {
-        $script:LvManageAccounts.Items | ForEach-Object { $_.Tag } | Where-Object { $_ -eq $_ }
-    }
+    # Refresh cached list to keep it in sync with remaining displayed rows
+    $remainingRefs = @($script:LvManageAccounts.Items | ForEach-Object { $_.Tag.ref })
+    $script:AllServiceAccounts = $script:AllServiceAccounts | Where-Object { $remainingRefs -contains $_.ref }
 
     if ($failed -eq 0) {
         Set-Status "$deleted account(s) deleted successfully." 'Green'
