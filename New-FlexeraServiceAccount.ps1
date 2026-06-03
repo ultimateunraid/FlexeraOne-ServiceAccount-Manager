@@ -299,6 +299,7 @@ function New-ListView {
     $lv.View          = [System.Windows.Forms.View]::Details
     $lv.FullRowSelect = $true
     $lv.GridLines     = $true
+    $lv.Scrollable    = $true
     $lv.Font          = $FONT_LABEL
     foreach ($col in $Columns) { $null = $lv.Columns.Add($col, -2) }
     return $lv
@@ -421,6 +422,7 @@ $script:LbCreateRoles                = New-Object System.Windows.Forms.ListBox
 $script:LbCreateRoles.Location       = New-Object System.Drawing.Point(125, 136)
 $script:LbCreateRoles.Size           = New-Object System.Drawing.Size(340, 180)
 $script:LbCreateRoles.SelectionMode  = 'MultiExtended'
+$script:LbCreateRoles.ScrollAlwaysVisible = $true
 $script:LbCreateRoles.Font           = $FONT_LABEL
 $script:LbCreateRoles.Anchor         = $AnchorTLR
 $null = $script:LbCreateRoles.Items.Add('Connect first to load available roles')
@@ -462,6 +464,7 @@ $script:LbAssignRoles               = New-Object System.Windows.Forms.ListBox
 $script:LbAssignRoles.Location      = New-Object System.Drawing.Point(125, 104)
 $script:LbAssignRoles.Size          = New-Object System.Drawing.Size(340, 190)
 $script:LbAssignRoles.SelectionMode = 'MultiExtended'
+$script:LbAssignRoles.ScrollAlwaysVisible = $true
 $script:LbAssignRoles.Font          = $FONT_LABEL
 $script:LbAssignRoles.Anchor        = $AnchorTLR
 $null = $script:LbAssignRoles.Items.Add('Connect first to load available roles')
