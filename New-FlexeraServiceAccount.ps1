@@ -640,29 +640,38 @@ $tabs.TabPages.Add($tabManage)
 #--------------------------------------------
 # TAB 6: Log Viewer
 #--------------------------------------------
-$tabLog      = New-Object System.Windows.Forms.TabPage
-$tabLog.Text = '  Log  '
+$tabLog         = New-Object System.Windows.Forms.TabPage
+$tabLog.Text    = '  Log  '
+$tabLog.Padding = New-Object System.Windows.Forms.Padding(0)
 
-$btnRefreshLog          = New-Button 'Refresh' 10 10 80 26
-$btnOpenLogFolder       = New-Button 'Open Log Folder' 100 10 130 26
+# Top bar panel — fixed height, stretches horizontally
+$pnlLogBar          = New-Object System.Windows.Forms.Panel
+$pnlLogBar.Dock     = [System.Windows.Forms.DockStyle]::Top
+$pnlLogBar.Height   = 36
+$pnlLogBar.BackColor= $COLOR_PANEL
+
+$btnRefreshLog          = New-Button 'Refresh' 6 4 80 26
+$btnOpenLogFolder       = New-Button 'Open Log Folder' 92 4 130 26
 $lblLogPath             = New-Object System.Windows.Forms.Label
-$lblLogPath.Location    = New-Object System.Drawing.Point(240, 14)
-$lblLogPath.Size        = New-Object System.Drawing.Size(490, 18)
+$lblLogPath.Location    = New-Object System.Drawing.Point(230, 8)
+$lblLogPath.Size        = New-Object System.Drawing.Size(500, 18)
 $lblLogPath.Font        = New-Object System.Drawing.Font('Segoe UI', 8)
 $lblLogPath.ForeColor   = [System.Drawing.Color]::Gray
+$lblLogPath.Anchor      = $AnchorTLR
 $lblLogPath.Text        = $script:LogFile
+$pnlLogBar.Controls.AddRange(@($btnRefreshLog, $btnOpenLogFolder, $lblLogPath))
 
 $script:TxtLog            = New-Object System.Windows.Forms.RichTextBox
-$script:TxtLog.Location   = New-Object System.Drawing.Point(10, 44)
-$script:TxtLog.Size       = New-Object System.Drawing.Size(710, 448)
+$script:TxtLog.Dock       = [System.Windows.Forms.DockStyle]::Fill
 $script:TxtLog.Font       = New-Object System.Drawing.Font('Consolas', 8)
 $script:TxtLog.ReadOnly   = $true
 $script:TxtLog.BackColor  = [System.Drawing.Color]::FromArgb(20, 20, 20)
 $script:TxtLog.ForeColor  = [System.Drawing.Color]::LightGray
 $script:TxtLog.ScrollBars = 'Vertical'
-$script:TxtLog.Anchor     = $AnchorAll
 
-$tabLog.Controls.AddRange(@($btnRefreshLog, $btnOpenLogFolder, $lblLogPath, $script:TxtLog))
+# Add RichTextBox first so Dock=Fill fills remaining space after the top panel
+$tabLog.Controls.Add($script:TxtLog)
+$tabLog.Controls.Add($pnlLogBar)
 $tabs.TabPages.Add($tabLog)
 
 # ---- Status bar ----
