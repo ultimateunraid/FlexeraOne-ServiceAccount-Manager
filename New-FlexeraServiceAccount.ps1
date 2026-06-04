@@ -110,12 +110,11 @@ function Invoke-Connect {
 }
 
 function ConvertTo-GrantRef {
-    # Converts the service-account ref returned by the SA list API
-    # into the ref:nam format expected by the access-rules grant endpoint.
-    # e.g. 'iam#service-account:10827' -> 'ref:nam:27744::iam:service-account:10827'
+    # Converts 'iam#service-account:10827' -> 'ref:nam:::iam:service-account:10827'
+    # Service accounts (like users) use empty org segment — no orgId in the middle.
     param ([string]$IamRef)
     if ($IamRef -match '^iam#(.+)$') {
-        return "ref:nam:$($script:OrgId)::iam:$($Matches[1])"
+        return "ref:nam:::iam:$($Matches[1])"
     }
     # Already in ref:nam format or unknown — return as-is
     return $IamRef
@@ -1099,37 +1098,41 @@ $ctxManage.Add_Opening({
 
 $mnuCopyRef.Add_Click({
     $item = $script:LvManageAccounts.SelectedItems[0]
-    if ($item) {
-        Set-Clipboard $item.SubItems[2].Text
-        Set-Status "Subject Ref copied: $($item.SubItems[2].Text)" 'Green'
-        Write-Log INFO "Copied Subject Ref to clipboard: $($item.SubItems[2].Text)"
+    if ($item -and $item.Tag) {
+        $val = Safe-Str $item.Tag.ref
+        Set-Clipboard $val
+        Set-Status "Subject Ref (iam#) copied: $val" 'Green'
+        Write-Log INFO "Copied Subject Ref (iam#) to clipboard: $val"
     }
 })
 
 $mnuCopyApiRef.Add_Click({
     $item = $script:LvManageAccounts.SelectedItems[0]
-    if ($item) {
-        Set-Clipboard $item.SubItems[3].Text
-        Set-Status "API Subject Ref copied: $($item.SubItems[3].Text)" 'Green'
-        Write-Log INFO "Copied API Subject Ref to clipboard: $($item.SubItems[3].Text)"
+    if ($item -and $item.Tag) {
+        $val = ConvertTo-GrantRef -IamRef (Safe-Str $item.Tag.ref)
+        Set-Clipboard $val
+        Set-Status "Subject Ref (API) copied: $val" 'Green'
+        Write-Log INFO "Copied Subject Ref (API) to clipboard: $val"
     }
 })
 
 $mnuCopyId.Add_Click({
     $item = $script:LvManageAccounts.SelectedItems[0]
-    if ($item) {
-        Set-Clipboard $item.SubItems[1].Text
-        Set-Status "ID copied: $($item.SubItems[1].Text)" 'Green'
-        Write-Log INFO "Copied ID to clipboard: $($item.SubItems[1].Text)"
+    if ($item -and $item.Tag) {
+        $val = Safe-Str $item.Tag.id
+        Set-Clipboard $val
+        Set-Status "ID copied: $val" 'Green'
+        Write-Log INFO "Copied ID to clipboard: $val"
     }
 })
 
 $mnuCopyName.Add_Click({
     $item = $script:LvManageAccounts.SelectedItems[0]
-    if ($item) {
-        Set-Clipboard $item.Text
-        Set-Status "Name copied: $($item.Text)" 'Green'
-        Write-Log INFO "Copied Name to clipboard: $($item.Text)"
+    if ($item -and $item.Tag) {
+        $val = Safe-Str $item.Tag.name
+        Set-Clipboard $val
+        Set-Status "Name copied: $val" 'Green'
+        Write-Log INFO "Copied Name to clipboard: $val"
     }
 })
 
