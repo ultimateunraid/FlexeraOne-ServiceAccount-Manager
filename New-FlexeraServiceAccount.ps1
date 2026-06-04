@@ -687,7 +687,7 @@ $btnConnect.Add_Click({
         $script:ConnectIndicator.Text      = [char]0x2714 + ' Connected'
         $script:ConnectIndicator.ForeColor = [System.Drawing.Color]::Green
 
-        $derivedScope      = "global/orgs/$orgId"
+        $derivedScope      = "ref:nam:::iam:org:$orgId"
         $txtCScopeRef.Text = $derivedScope
         $txtAScopeRef.Text = $derivedScope
         Write-Log INFO "Scope Ref auto-set to '$derivedScope'"
