@@ -55,18 +55,18 @@ function Get-ApiErrorMessage {
     $code = $null
     if ($ErrorRecord.Exception.Response) {
         $code = [int]$ErrorRecord.Exception.Response.StatusCode
+    }
+    # ErrorDetails.Message is captured by PS5 before the stream closes — most reliable
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $body = $ErrorRecord.ErrorDetails.Message
+        Write-Log WARN "API error body: $body"
         try {
-            $stream = $ErrorRecord.Exception.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($stream)
-            $body   = $reader.ReadToEnd()
-            $reader.Close()
-            Write-Log WARN "API error body: $body"
             $parsed = $body | ConvertFrom-Json
             if ($parsed.message) { return "HTTP $code - $($parsed.message)" }
-            return "HTTP $code - $body"
         } catch { }
-        return "HTTP $code - $($ErrorRecord.Exception.Message)"
+        return "HTTP $code - $body"
     }
+    if ($code) { return "HTTP $code - $($ErrorRecord.Exception.Message)" }
     return $ErrorRecord.Exception.Message
 }
 
@@ -232,6 +232,9 @@ function Get-AssignedRoles {
         $all      = Unwrap-ApiResponse $resp
         $grantRef = ConvertTo-GrantRef -IamRef $SubjectRef
         Write-Log INFO "GET  | Total access rules returned: $($all.Count). Filtering for '$grantRef'"
+        if ($all.Count -gt 0) {
+            Write-Log INFO "GET  | Sample full access rule: $($all[0] | ConvertTo-Json -Depth 5 -Compress)"
+        }
         $match = @($all | Where-Object { $_.subject.ref -eq $grantRef })
         Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$grantRef' (of $($all.Count) total rules)."
         return $match
