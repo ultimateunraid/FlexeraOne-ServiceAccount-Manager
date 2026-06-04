@@ -230,15 +230,15 @@ function Invoke-RevokeRole {
         subject = @{ ref  = $grantRef }
     } | ConvertTo-Json -Depth 5
 
-    Write-Log INFO "DELETE | $uri | Role='$RoleName' Subject='$grantRef' Scope='$ScopeRef'"
+    Write-Log INFO "PUT  | $uri | Role='$RoleName' Subject='$grantRef' Scope='$ScopeRef'"
     try {
-        $null = Invoke-RestMethod -Method Delete -Uri $uri -Headers $script:Headers -Body $payload
-        Write-Log SUCCESS "DELETE | Role '$RoleName' revoked from '$SubjectRef'."
+        $null = Invoke-RestMethod -Method Put -Uri $uri -Headers $script:Headers -Body $payload
+        Write-Log SUCCESS "PUT  | Role '$RoleName' revoked from '$SubjectRef'."
         return $true
     }
     catch {
         $msg = Get-ApiErrorMessage $_
-        Write-Log ERROR "DELETE | Failed to revoke role '$RoleName' from '$SubjectRef': $msg"
+        Write-Log ERROR "PUT  | Failed to revoke role '$RoleName' from '$SubjectRef': $msg"
         throw $msg
     }
 }
