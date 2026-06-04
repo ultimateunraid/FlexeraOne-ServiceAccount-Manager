@@ -219,6 +219,31 @@ function Invoke-AssignRoles {
     return $results
 }
 
+function Invoke-RevokeRole {
+    param ([string]$SubjectRef, [string]$RoleName, [string]$ScopeRef)
+
+    $uri      = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/access-rules/revoke"
+    $grantRef = ConvertTo-GrantRef -IamRef $SubjectRef
+
+    $payload = @{
+        role    = @{ name = $RoleName }
+        scope   = @{ ref  = $ScopeRef }
+        subject = @{ ref  = $grantRef }
+    } | ConvertTo-Json -Depth 5
+
+    Write-Log INFO "DELETE | $uri | Role='$RoleName' Subject='$grantRef' Scope='$ScopeRef'"
+    try {
+        $null = Invoke-RestMethod -Method Delete -Uri $uri -Headers $script:Headers -Body $payload
+        Write-Log SUCCESS "DELETE | Role '$RoleName' revoked from '$SubjectRef'."
+        return $true
+    }
+    catch {
+        $msg = Get-ApiErrorMessage $_
+        Write-Log ERROR "DELETE | Failed to revoke role '$RoleName' from '$SubjectRef': $msg"
+        throw $msg
+    }
+}
+
 function Get-AssignedRoles {
     param ([string]$SubjectRef)
 
@@ -232,9 +257,15 @@ function Get-AssignedRoles {
         $all      = Unwrap-ApiResponse $resp
         $grantRef = ConvertTo-GrantRef -IamRef $SubjectRef
         Write-Log INFO "GET  | Total access rules returned: $($all.Count). Filtering for '$grantRef'"
-        if ($all.Count -gt 0) {
-            Write-Log INFO "GET  | Sample full access rule: $($all[0] | ConvertTo-Json -Depth 5 -Compress)"
+
+        # Log any service-account rules found so we can verify the stored format
+        $saRules = @($all | Where-Object { $_.subject.ref -like '*service-account*' })
+        if ($saRules.Count -gt 0) {
+            Write-Log INFO "GET  | Found $($saRules.Count) service-account rule(s). First: $($saRules[0] | ConvertTo-Json -Depth 5 -Compress)"
+        } else {
+            Write-Log INFO "GET  | No service-account rules found in response."
         }
+
         $match = @($all | Where-Object { $_.subject.ref -eq $grantRef })
         Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$grantRef' (of $($all.Count) total rules)."
         return $match
@@ -528,10 +559,17 @@ $tabView.Text = '  View Assigned Roles  '
 $lblVSubj            = New-Label 'Subject Ref: *' 10 16 110
 $txtVSubj            = New-TextBox 125 14 400
 $btnView             = New-Button 'Get Roles' 540 12 110
-$script:LvViewResult = New-ListView 10 52 710 436 @('Role Name','Display Name','Category','Assigned At')
-$script:LvViewResult.Anchor = $AnchorAll
 
-$tabView.Controls.AddRange(@($lblVSubj, $txtVSubj, $btnView, $script:LvViewResult))
+$btnRevokeRole              = New-Button 'Revoke Selected' 10 460 140 26
+$btnRevokeRole.BackColor    = [System.Drawing.Color]::FromArgb(180, 40, 40)
+$btnRevokeRole.Enabled      = $false
+
+$script:LvViewResult = New-ListView 10 46 710 406 @('Role Name','Display Name','Category','Assigned At')
+$script:LvViewResult.Anchor      = $AnchorAll
+$script:LvViewResult.MultiSelect = $true
+$script:LvViewResult.HideSelection = $false
+
+$tabView.Controls.AddRange(@($lblVSubj, $txtVSubj, $btnView, $script:LvViewResult, $btnRevokeRole))
 $tabs.TabPages.Add($tabView)
 
 #--------------------------------------------
@@ -572,7 +610,7 @@ $lblManageCount.Font     = New-Object System.Drawing.Font('Segoe UI', 8)
 $lblManageCount.ForeColor= [System.Drawing.Color]::Gray
 $lblManageCount.Text     = ''
 
-$script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','ID','Subject Ref','Created By')
+$script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','ID','Subject Ref (iam#)','Subject Ref (API format)','Created By')
 $script:LvManageAccounts.MultiSelect    = $true
 $script:LvManageAccounts.HideSelection  = $false
 $script:LvManageAccounts.Anchor         = $AnchorAll
@@ -580,12 +618,15 @@ $script:LvManageAccounts.Anchor         = $AnchorAll
 # Right-click context menu
 $ctxManage      = New-Object System.Windows.Forms.ContextMenuStrip
 $mnuCopyRef     = New-Object System.Windows.Forms.ToolStripMenuItem
-$mnuCopyRef.Text= 'Copy Subject Ref'
-$mnuCopyId      = New-Object System.Windows.Forms.ToolStripMenuItem
-$mnuCopyId.Text = 'Copy ID'
-$mnuCopyName    = New-Object System.Windows.Forms.ToolStripMenuItem
-$mnuCopyName.Text = 'Copy Name'
+$mnuCopyRef.Text   = 'Copy Subject Ref (iam# format)'
+$mnuCopyApiRef     = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyApiRef.Text= 'Copy Subject Ref (API format)'
+$mnuCopyId         = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyId.Text    = 'Copy ID'
+$mnuCopyName       = New-Object System.Windows.Forms.ToolStripMenuItem
+$mnuCopyName.Text  = 'Copy Name'
 $null = $ctxManage.Items.Add($mnuCopyRef)
+$null = $ctxManage.Items.Add($mnuCopyApiRef)
 $null = $ctxManage.Items.Add($mnuCopyId)
 $null = $ctxManage.Items.Add($mnuCopyName)
 $script:LvManageAccounts.ContextMenuStrip = $ctxManage
@@ -815,6 +856,55 @@ $btnAssign.Add_Click({
     }
 })
 
+# Enable revoke button when roles are selected
+$script:LvViewResult.Add_SelectedIndexChanged({
+    $btnRevokeRole.Enabled = ($script:LvViewResult.SelectedItems.Count -gt 0 -and $txtVSubj.Text.Trim() -ne '')
+})
+
+# Revoke Selected Role(s)
+$btnRevokeRole.Add_Click({
+    $subj          = $txtVSubj.Text.Trim()
+    $selectedRoles = @($script:LvViewResult.SelectedItems)
+    if ($subj -eq '' -or $selectedRoles.Count -eq 0) { return }
+
+    $names   = ($selectedRoles | ForEach-Object { $_.Text }) -join "`n  - "
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "Revoke $($selectedRoles.Count) role(s) from '$subj'?`n`n  - $names",
+        'Confirm Revoke',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+    )
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    Write-Log INFO "Revoke confirmed for $($selectedRoles.Count) role(s) from '$subj'."
+    $scopeRef = $txtAScopeRef.Text.Trim()
+    $revoked  = 0
+    $failed   = 0
+
+    foreach ($item in $selectedRoles) {
+        try {
+            Invoke-RevokeRole -SubjectRef $subj -RoleName $item.Text -ScopeRef $scopeRef
+            $script:LvViewResult.Items.Remove($item)
+            $revoked++
+        }
+        catch {
+            $failed++
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to revoke '$($item.Text)': $_", 'Revoke Error',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    }
+
+    if ($failed -eq 0) {
+        Set-Status "$revoked role(s) revoked successfully." 'Green'
+    } else {
+        Set-Status "$revoked revoked, $failed failed. Check log." 'DarkOrange'
+    }
+    $btnRevokeRole.Enabled = $false
+})
+
 # View Assigned Roles
 $btnView.Add_Click({
     if (-not $script:AccessToken) {
@@ -888,6 +978,7 @@ $txtManageFilter.Add_TextChanged({
         $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
         $null = $row.SubItems.Add((Safe-Str $sa.id))
         $null = $row.SubItems.Add((Safe-Str $sa.ref))
+        $null = $row.SubItems.Add((ConvertTo-GrantRef -IamRef (Safe-Str $sa.ref)))
         $null = $row.SubItems.Add((Safe-Str $sa.createdBy))
         $row.Tag = $sa
         $null = $script:LvManageAccounts.Items.Add($row)
@@ -1000,9 +1091,10 @@ $btnDeleteSelected.Add_Click({
 # Manage Accounts context menu
 $ctxManage.Add_Opening({
     $hasSelection = ($script:LvManageAccounts.SelectedItems.Count -gt 0)
-    $mnuCopyRef.Enabled  = $hasSelection
-    $mnuCopyId.Enabled   = $hasSelection
-    $mnuCopyName.Enabled = $hasSelection
+    $mnuCopyRef.Enabled    = $hasSelection
+    $mnuCopyApiRef.Enabled = $hasSelection
+    $mnuCopyId.Enabled     = $hasSelection
+    $mnuCopyName.Enabled   = $hasSelection
 })
 
 $mnuCopyRef.Add_Click({
@@ -1011,6 +1103,15 @@ $mnuCopyRef.Add_Click({
         Set-Clipboard $item.SubItems[2].Text
         Set-Status "Subject Ref copied: $($item.SubItems[2].Text)" 'Green'
         Write-Log INFO "Copied Subject Ref to clipboard: $($item.SubItems[2].Text)"
+    }
+})
+
+$mnuCopyApiRef.Add_Click({
+    $item = $script:LvManageAccounts.SelectedItems[0]
+    if ($item) {
+        Set-Clipboard $item.SubItems[3].Text
+        Set-Status "API Subject Ref copied: $($item.SubItems[3].Text)" 'Green'
+        Write-Log INFO "Copied API Subject Ref to clipboard: $($item.SubItems[3].Text)"
     }
 })
 
