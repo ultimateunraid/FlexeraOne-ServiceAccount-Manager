@@ -555,20 +555,21 @@ $tabs.TabPages.Add($tabAssign)
 $tabView      = New-Object System.Windows.Forms.TabPage
 $tabView.Text = '  View Assigned Roles  '
 
-$lblVSubj            = New-Label 'Subject Ref: *' 10 16 110
-$txtVSubj            = New-TextBox 125 14 400
-$btnView             = New-Button 'Get Roles' 540 12 110
+$lblVSubj = New-Label 'Subject Ref: *' 10 16 110
+$txtVSubj = New-TextBox 125 14 360
+$btnView  = New-Button 'Get Roles' 495 12 110
 
-$btnRevokeRole              = New-Button 'Revoke Selected' 10 460 140 26
-$btnRevokeRole.BackColor    = [System.Drawing.Color]::FromArgb(180, 40, 40)
-$btnRevokeRole.Enabled      = $false
+$btnRevokeRole           = New-Button 'Revoke Selected' 615 12 110
+$btnRevokeRole.BackColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
+$btnRevokeRole.Enabled   = $false
 
-$script:LvViewResult = New-ListView 10 46 710 406 @('Role Name','Display Name','Category','Assigned At')
-$script:LvViewResult.Anchor      = $AnchorAll
-$script:LvViewResult.MultiSelect = $true
+$script:LvViewResult = New-ListView 10 46 710 446 @('Role Name','Display Name','Category','Assigned At')
+$script:LvViewResult.Dock          = [System.Windows.Forms.DockStyle]::None
+$script:LvViewResult.Anchor        = $AnchorAll
+$script:LvViewResult.MultiSelect   = $true
 $script:LvViewResult.HideSelection = $false
 
-$tabView.Controls.AddRange(@($lblVSubj, $txtVSubj, $btnView, $script:LvViewResult, $btnRevokeRole))
+$tabView.Controls.AddRange(@($lblVSubj, $txtVSubj, $btnView, $btnRevokeRole, $script:LvViewResult))
 $tabs.TabPages.Add($tabView)
 
 #--------------------------------------------
