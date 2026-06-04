@@ -60,8 +60,10 @@ function Get-ApiErrorMessage {
             $reader = New-Object System.IO.StreamReader($stream)
             $body   = $reader.ReadToEnd()
             $reader.Close()
+            Write-Log WARN "API error body: $body"
             $parsed = $body | ConvertFrom-Json
             if ($parsed.message) { return "HTTP $code - $($parsed.message)" }
+            return "HTTP $code - $body"
         } catch { }
         return "HTTP $code - $($ErrorRecord.Exception.Message)"
     }
@@ -105,6 +107,18 @@ function Invoke-Connect {
         Write-Log ERROR "AUTH | Failed: $msg"
         return "Auth failed: $msg"
     }
+}
+
+function ConvertTo-GrantRef {
+    # Converts the service-account ref returned by the SA list API
+    # into the ref:nam format expected by the access-rules grant endpoint.
+    # e.g. 'iam#service-account:10827' -> 'ref:nam:27744::iam:service-account:10827'
+    param ([string]$IamRef)
+    if ($IamRef -match '^iam#(.+)$') {
+        return "ref:nam:$($script:OrgId)::iam:$($Matches[1])"
+    }
+    # Already in ref:nam format or unknown — return as-is
+    return $IamRef
 }
 
 function Unwrap-ApiResponse {
@@ -177,17 +191,20 @@ function New-ServiceAccount {
 function Invoke-AssignRoles {
     param ([string]$SubjectRef, [string[]]$Roles, [string]$ScopeRef)
 
-    $uri     = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/access-rules/grant"
-    $results = @()
+    $uri        = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/access-rules/grant"
+    $grantRef   = ConvertTo-GrantRef -IamRef $SubjectRef
+    $results    = @()
+
+    Write-Log INFO "PUT  | Subject ref converted: '$SubjectRef' -> '$grantRef'"
 
     foreach ($role in $Roles) {
         $payload = @{
             role    = @{ name = $role }
             scope   = @{ ref  = $ScopeRef }
-            subject = @{ ref  = $SubjectRef }
+            subject = @{ ref  = $grantRef }
         } | ConvertTo-Json -Depth 5
 
-        Write-Log INFO "PUT  | $uri | Role='$role' Subject='$SubjectRef' Scope='$ScopeRef'"
+        Write-Log INFO "PUT  | $uri | Role='$role' Subject='$grantRef' Scope='$ScopeRef'"
         try {
             $null = Invoke-RestMethod -Method Put -Uri $uri -Headers $script:Headers -Body $payload
             Write-Log SUCCESS "PUT  | Role '$role' assigned to '$SubjectRef'."
@@ -212,14 +229,11 @@ function Get-AssignedRoles {
     Write-Log INFO "GET  | $uri (filtering client-side for '$SubjectRef')"
     try {
         $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
-        $all   = Unwrap-ApiResponse $resp
-        Write-Log INFO "GET  | Total access rules returned: $($all.Count)"
-        if ($all.Count -gt 0) {
-            $sample = $all | Select-Object -First 3 | ForEach-Object { "subject.ref=$($_.subject.ref)" }
-            Write-Log INFO "GET  | Sample subject.ref values: $($sample -join ' | ')"
-        }
-        $match = @($all | Where-Object { $_.subject.ref -eq $SubjectRef })
-        Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$SubjectRef' (of $($all.Count) total rules)."
+        $all      = Unwrap-ApiResponse $resp
+        $grantRef = ConvertTo-GrantRef -IamRef $SubjectRef
+        Write-Log INFO "GET  | Total access rules returned: $($all.Count). Filtering for '$grantRef'"
+        $match = @($all | Where-Object { $_.subject.ref -eq $grantRef })
+        Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$grantRef' (of $($all.Count) total rules)."
         return $match
     }
     catch {
@@ -520,8 +534,9 @@ $tabs.TabPages.Add($tabView)
 #--------------------------------------------
 # TAB 4: Browse Available Roles
 #--------------------------------------------
-$tabBrowse      = New-Object System.Windows.Forms.TabPage
-$tabBrowse.Text = '  Available Roles  '
+$tabBrowse         = New-Object System.Windows.Forms.TabPage
+$tabBrowse.Text    = '  Available Roles  '
+$tabBrowse.Padding = New-Object System.Windows.Forms.Padding(0)
 
 $script:LvAvailableRoles      = New-ListView 0 0 0 0 @('Role Name','Display Name','Category','Description')
 $script:LvAvailableRoles.Dock = [System.Windows.Forms.DockStyle]::Fill
