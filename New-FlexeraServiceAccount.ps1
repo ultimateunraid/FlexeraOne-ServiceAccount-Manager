@@ -213,6 +213,11 @@ function Get-AssignedRoles {
     try {
         $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
         $all   = Unwrap-ApiResponse $resp
+        Write-Log INFO "GET  | Total access rules returned: $($all.Count)"
+        if ($all.Count -gt 0) {
+            $sample = $all | Select-Object -First 3 | ForEach-Object { "subject.ref=$($_.subject.ref)" }
+            Write-Log INFO "GET  | Sample subject.ref values: $($sample -join ' | ')"
+        }
         $match = @($all | Where-Object { $_.subject.ref -eq $SubjectRef })
         Write-Log SUCCESS "GET  | $($match.Count) role(s) found for '$SubjectRef' (of $($all.Count) total rules)."
         return $match
@@ -518,17 +523,10 @@ $tabs.TabPages.Add($tabView)
 $tabBrowse      = New-Object System.Windows.Forms.TabPage
 $tabBrowse.Text = '  Available Roles  '
 
-$lblBrowseHint          = New-Object System.Windows.Forms.Label
-$lblBrowseHint.Text     = 'Connect to populate. All roles available in your org are listed here.'
-$lblBrowseHint.Location = New-Object System.Drawing.Point(10, 10)
-$lblBrowseHint.Size     = New-Object System.Drawing.Size(700, 18)
-$lblBrowseHint.Font     = New-Object System.Drawing.Font('Segoe UI', 8)
-$lblBrowseHint.ForeColor= [System.Drawing.Color]::Gray
+$script:LvAvailableRoles      = New-ListView 0 0 0 0 @('Role Name','Display Name','Category','Description')
+$script:LvAvailableRoles.Dock = [System.Windows.Forms.DockStyle]::Fill
 
-$script:LvAvailableRoles = New-ListView 10 32 710 460 @('Role Name','Display Name','Category','Description')
-$script:LvAvailableRoles.Anchor = $AnchorAll
-
-$tabBrowse.Controls.AddRange(@($lblBrowseHint, $script:LvAvailableRoles))
+$tabBrowse.Controls.Add($script:LvAvailableRoles)
 $tabs.TabPages.Add($tabBrowse)
 
 #--------------------------------------------
