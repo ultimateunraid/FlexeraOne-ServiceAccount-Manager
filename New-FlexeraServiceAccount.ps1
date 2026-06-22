@@ -56,7 +56,7 @@ function Get-ApiErrorMessage {
     if ($ErrorRecord.Exception.Response) {
         $code = [int]$ErrorRecord.Exception.Response.StatusCode
     }
-    # ErrorDetails.Message is captured by PS5 before the stream closes — most reliable
+    # ErrorDetails.Message is captured by PS5 before the stream closes - most reliable
     if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
         $body = $ErrorRecord.ErrorDetails.Message
         Write-Log WARN "API error body: $body"
@@ -70,11 +70,19 @@ function Get-ApiErrorMessage {
     return $ErrorRecord.Exception.Message
 }
 
-# Safely coerce a value to string — ListViewItem.SubItems.Add() throws on $null
+# Safely coerce a value to string - ListViewItem.SubItems.Add() throws on $null
 function Safe-Str {
     param ($Value)
     if ($null -eq $Value) { return '' }
     return [string]$Value
+}
+
+# Render the credential-status cell. $null = could not determine (endpoint error).
+function Format-CredCell {
+    param ($Count)
+    if ($null -eq $Count) { return '?' }
+    if ([int]$Count -gt 0) { return "Yes ($Count)" }
+    return 'No'
 }
 
 #endregion
@@ -111,12 +119,12 @@ function Invoke-Connect {
 
 function ConvertTo-GrantRef {
     # Converts 'iam#service-account:10827' -> 'ref:nam:::iam:service-account:10827'
-    # Service accounts (like users) use empty org segment — no orgId in the middle.
+    # Service accounts (like users) use empty org segment - no orgId in the middle.
     param ([string]$IamRef)
     if ($IamRef -match '^iam#(.+)$') {
         return "ref:nam:::iam:$($Matches[1])"
     }
-    # Already in ref:nam format or unknown — return as-is
+    # Already in ref:nam format or unknown - return as-is
     return $IamRef
 }
 
@@ -163,11 +171,11 @@ function New-ServiceAccount {
 
     Write-Log INFO "POST | $uri | Name='$Name' Description='$Description'"
     try {
-        # API returns empty body on success — follow up with GET to retrieve details
+        # API returns empty body on success - follow up with GET to retrieve details
         $null = Invoke-RestMethod -Method Post -Uri $uri `
             -Headers $script:Headers `
             -Body ($body | ConvertTo-Json -Depth 3)
-        Write-Log SUCCESS "POST | Service account '$Name' created (empty response body — fetching details)."
+        Write-Log SUCCESS "POST | Service account '$Name' created (empty response body - fetching details)."
 
         $accounts = Get-ServiceAccounts
         $created  = $accounts | Where-Object { $_.name -eq $Name } |
@@ -183,6 +191,58 @@ function New-ServiceAccount {
     catch {
         $msg = Get-ApiErrorMessage $_
         Write-Log ERROR "POST | Failed to create service account '$Name': $msg"
+        throw $msg
+    }
+}
+
+function New-ServiceAccountClient {
+    # Generates a client (clientId + clientSecret) for an existing service account.
+    # The clientSecret is returned by the API ONCE and cannot be retrieved later.
+    param ([string]$ServiceAccountId)
+
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts/$ServiceAccountId/clients"
+    Write-Log INFO "POST | $uri | Generating client credentials for SA ID=$ServiceAccountId"
+    try {
+        $resp = Invoke-RestMethod -Method Post -Uri $uri -Headers $script:Headers
+        # Never log the secret - only confirm the clientId was issued.
+        Write-Log SUCCESS "POST | Client credentials generated. clientId=$($resp.clientId)"
+        return $resp
+    }
+    catch {
+        $msg = Get-ApiErrorMessage $_
+        Write-Log ERROR "POST | Failed to generate client credentials for SA ID=${ServiceAccountId}: $msg"
+        throw $msg
+    }
+}
+
+function Get-ServiceAccountClients {
+    # Lists the clients (credentials) of a service account. Secrets are NOT returned -
+    # only metadata (clientId, createdAt, etc). Used to show credential status and to
+    # detect existing credentials before generating new ones.
+    # NOTE: this endpoint is not covered by public docs; caller must handle errors.
+    param ([string]$ServiceAccountId)
+
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts/$ServiceAccountId/clients"
+    Write-Log INFO "GET  | $uri"
+    $resp  = Invoke-RestMethod -Method Get -Uri $uri -Headers $script:Headers
+    $items = @(Unwrap-ApiResponse $resp) | Where-Object { $null -ne $_ }
+    return @($items)
+}
+
+function Remove-ServiceAccountClient {
+    # Deletes a single client (credential) from a service account by clientId.
+    param ([string]$ServiceAccountId, [string]$ClientId)
+
+    $uri = "$($script:ApiBase)/iam/v1/orgs/$($script:OrgId)/service-accounts/$ServiceAccountId/clients/$ClientId"
+    Write-Log INFO "DELETE | $uri | Deleting client '$ClientId' from SA ID=$ServiceAccountId"
+    try {
+        $null = Invoke-RestMethod -Method Delete -Uri $uri -Headers $script:Headers
+        Write-Log SUCCESS "DELETE | Client '$ClientId' deleted from SA ID=$ServiceAccountId."
+        return $true
+    }
+    catch {
+        $msg = Get-ApiErrorMessage $_
+        Write-Log ERROR "DELETE | Failed to delete client '$ClientId' from SA ID=${ServiceAccountId}: $msg"
         throw $msg
     }
 }
@@ -401,12 +461,266 @@ function Populate-RoleListBoxes {
     $script:LvAvailableRoles.EndUpdate()
 }
 
+function Show-CredentialsDialog {
+    # Modal "copy once" dialog. The clientSecret cannot be retrieved again, so this
+    # is the user's single chance to copy/save it.
+    param ([string]$AccountName, [string]$ClientId, [string]$ClientSecret)
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text            = "Client Credentials - $AccountName"
+    $dlg.Size            = New-Object System.Drawing.Size(620, 250)
+    $dlg.StartPosition   = 'CenterParent'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox     = $false
+    $dlg.MinimizeBox     = $false
+    $dlg.BackColor       = $COLOR_PANEL
+    $dlg.Font            = $FONT_LABEL
+
+    $lblWarn = New-Object System.Windows.Forms.Label
+    $lblWarn.Text      = [char]0x26A0 + ' Copy the Client Secret now. It is shown ONCE and cannot be retrieved again - only regenerated.'
+    $lblWarn.Location  = New-Object System.Drawing.Point(15, 12)
+    $lblWarn.Size      = New-Object System.Drawing.Size(585, 36)
+    $lblWarn.ForeColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
+    $lblWarn.Font      = $FONT_BOLD
+
+    $lblId = New-Label 'Client ID:' 15 58 90
+    $txtId = New-Object System.Windows.Forms.TextBox
+    $txtId.Location = New-Object System.Drawing.Point(105, 56)
+    $txtId.Size     = New-Object System.Drawing.Size(390, 22)
+    $txtId.Font     = $FONT_LABEL
+    $txtId.ReadOnly = $true
+    $txtId.Text     = $ClientId
+    $btnCopyId = New-Button 'Copy' 505 55 90 26
+
+    $lblSecret = New-Label 'Client Secret:' 15 92 90
+    $txtSecret = New-Object System.Windows.Forms.TextBox
+    $txtSecret.Location = New-Object System.Drawing.Point(105, 90)
+    $txtSecret.Size     = New-Object System.Drawing.Size(390, 22)
+    $txtSecret.Font     = $FONT_LABEL
+    $txtSecret.ReadOnly = $true
+    $txtSecret.Text     = $ClientSecret
+    $btnCopySecret = New-Button 'Copy' 505 89 90 26
+
+    $btnSave  = New-Button 'Save to File...' 105 130 130 28
+    $btnClose = New-Button 'Close'           465 130 130 28
+
+    $lblCopied = New-Object System.Windows.Forms.Label
+    $lblCopied.Location  = New-Object System.Drawing.Point(245, 136)
+    $lblCopied.Size      = New-Object System.Drawing.Size(210, 18)
+    $lblCopied.Font      = $FONT_LABEL
+    $lblCopied.ForeColor = [System.Drawing.Color]::DarkGreen
+    $lblCopied.Text      = ''
+
+    $btnCopyId.Add_Click({
+        Set-Clipboard -Value $ClientId
+        $lblCopied.Text = 'Client ID copied.'
+        Write-Log INFO 'Client ID copied to clipboard from credentials dialog.'
+    })
+    $btnCopySecret.Add_Click({
+        Set-Clipboard -Value $ClientSecret
+        $lblCopied.Text = 'Client Secret copied.'
+        Write-Log INFO 'Client Secret copied to clipboard from credentials dialog.'
+    })
+    $btnSave.Add_Click({
+        $sfd = New-Object System.Windows.Forms.SaveFileDialog
+        $sfd.Filter   = 'Text file (*.txt)|*.txt'
+        $sfd.FileName = "FlexeraSA_$($AccountName -replace '[^\w\-]', '_')_credentials.txt"
+        if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $content = @(
+                "Flexera One Service Account Credentials"
+                "Account : $AccountName"
+                "Org ID  : $($script:OrgId)"
+                "Saved   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                ""
+                "clientId     : $ClientId"
+                "clientSecret : $ClientSecret"
+            ) -join "`r`n"
+            Set-Content -Path $sfd.FileName -Value $content -Encoding UTF8
+            $lblCopied.Text = 'Saved to file.'
+            Write-Log INFO "Credentials saved to file: $($sfd.FileName)"
+        }
+    })
+    $btnClose.Add_Click({ $dlg.Close() })
+    $dlg.AcceptButton = $btnClose
+
+    $dlg.Controls.AddRange(@(
+        $lblWarn, $lblId, $txtId, $btnCopyId,
+        $lblSecret, $txtSecret, $btnCopySecret,
+        $btnSave, $btnClose, $lblCopied
+    ))
+    $null = $dlg.ShowDialog($script:Form)
+    $dlg.Dispose()
+}
+
+function Update-ClientListView {
+    # (Re)loads a service account's clients into a ListView. Returns the client count,
+    # or -1 if the listing failed.
+    param ($Lv, [string]$ServiceAccountId, $StatusLabel)
+
+    $Lv.BeginUpdate()
+    $Lv.Items.Clear()
+    if ($StatusLabel) { $StatusLabel.Text = 'Loading clients...'; $StatusLabel.ForeColor = [System.Drawing.Color]::Gray }
+    try {
+        $clients = @(Get-ServiceAccountClients -ServiceAccountId $ServiceAccountId)
+        foreach ($c in $clients) {
+            $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $c.clientId))
+            $null = $row.SubItems.Add((Safe-Str $c.createdAt))
+            $null = $row.SubItems.Add((Safe-Str $c.createdBy))
+            $null = $row.SubItems.Add((Safe-Str $c.kind))
+            $row.Tag = $c
+            $null = $Lv.Items.Add($row)
+        }
+        $Lv.Columns[0].Width = 230
+        $Lv.Columns[1].Width = 170
+        $Lv.Columns[2].Width = 110
+        $Lv.Columns[3].Width = 170
+        $Lv.EndUpdate()
+        if ($StatusLabel) {
+            $StatusLabel.Text      = "$($clients.Count) client(s)."
+            $StatusLabel.ForeColor = [System.Drawing.Color]::Black
+        }
+        return $clients.Count
+    }
+    catch {
+        $Lv.EndUpdate()
+        $msg = Get-ApiErrorMessage $_
+        if ($StatusLabel) { $StatusLabel.Text = "Failed to list clients: $msg"; $StatusLabel.ForeColor = [System.Drawing.Color]::Red }
+        Write-Log ERROR "Manage Clients | list failed for SA ID=${ServiceAccountId}: $msg"
+        return -1
+    }
+}
+
+function Show-ClientManagerDialog {
+    # Per-account client manager: list, create (copy-once secret), and delete clients.
+    param ([string]$AccountName, [string]$ServiceAccountId)
+
+    $aTLR = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $aAll = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $aBL  = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+    $aBR  = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text            = "Manage Clients - $AccountName (ID $ServiceAccountId)"
+    $dlg.Size            = New-Object System.Drawing.Size(740, 470)
+    $dlg.MinimumSize     = New-Object System.Drawing.Size(640, 360)
+    $dlg.StartPosition   = 'CenterParent'
+    $dlg.FormBorderStyle = 'Sizable'
+    $dlg.BackColor       = $COLOR_PANEL
+    $dlg.Font            = $FONT_LABEL
+
+    $lblInfo = New-Object System.Windows.Forms.Label
+    $lblInfo.Text      = 'A service account can have multiple clients. Best practice: keep only one in active use. To rotate without downtime, create a new client, switch your app to it, then delete the old one.'
+    $lblInfo.Location  = New-Object System.Drawing.Point(12, 10)
+    $lblInfo.Size      = New-Object System.Drawing.Size(704, 34)
+    $lblInfo.ForeColor = [System.Drawing.Color]::DimGray
+    $lblInfo.Anchor    = $aTLR
+
+    $lvClients = New-ListView 12 50 704 300 @('Client ID','Created At','Created By','Kind')
+    $lvClients.MultiSelect   = $false
+    $lvClients.HideSelection = $false
+    $lvClients.Anchor        = $aAll
+
+    $btnCreateClient = New-Button 'Create New Client' 12 360 150 30
+    $btnCreateClient.Anchor  = $aBL
+
+    $btnDeleteClient = New-Button 'Delete Selected' 172 360 130 30
+    $btnDeleteClient.BackColor = [System.Drawing.Color]::FromArgb(180, 40, 40)
+    $btnDeleteClient.Enabled   = $false
+    $btnDeleteClient.Anchor    = $aBL
+
+    $btnRefreshClients = New-Button 'Refresh' 312 360 90 30
+    $btnRefreshClients.Anchor  = $aBL
+
+    $btnCloseClients = New-Button 'Close' 626 360 90 30
+    $btnCloseClients.Anchor    = $aBR
+
+    $lblDlgStatus = New-Object System.Windows.Forms.Label
+    $lblDlgStatus.Location  = New-Object System.Drawing.Point(12, 398)
+    $lblDlgStatus.Size      = New-Object System.Drawing.Size(704, 18)
+    $lblDlgStatus.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
+    $lblDlgStatus.ForeColor = [System.Drawing.Color]::Black
+    $lblDlgStatus.Anchor    = ([System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right)
+
+    $lvClients.Add_SelectedIndexChanged({
+        $btnDeleteClient.Enabled = ($lvClients.SelectedItems.Count -eq 1)
+    })
+
+    $btnRefreshClients.Add_Click({
+        $null = Update-ClientListView -Lv $lvClients -ServiceAccountId $ServiceAccountId -StatusLabel $lblDlgStatus
+        $btnDeleteClient.Enabled = $false
+    })
+
+    $btnCreateClient.Add_Click({
+        $existing = $lvClients.Items.Count
+        if ($existing -gt 0) {
+            $proceed = [System.Windows.Forms.MessageBox]::Show(
+                "This service account already has $existing client(s). A new client will be ADDED (existing clients keep working).`n`nContinue?",
+                'Create New Client',
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Information)
+            if ($proceed -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        }
+        $lblDlgStatus.Text = 'Creating client...'; $lblDlgStatus.ForeColor = [System.Drawing.Color]::Gray
+        try {
+            $client = New-ServiceAccountClient -ServiceAccountId $ServiceAccountId
+            if (-not $client.clientId) { throw 'Response did not contain a clientId.' }
+            Show-CredentialsDialog -AccountName $AccountName `
+                -ClientId (Safe-Str $client.clientId) `
+                -ClientSecret (Safe-Str $client.clientSecret)
+            $null = Update-ClientListView -Lv $lvClients -ServiceAccountId $ServiceAccountId -StatusLabel $lblDlgStatus
+            $btnDeleteClient.Enabled = $false
+        }
+        catch {
+            $lblDlgStatus.Text = "Create failed: $_"; $lblDlgStatus.ForeColor = [System.Drawing.Color]::Red
+            [System.Windows.Forms.MessageBox]::Show("Error: $_", 'Create Failed',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+
+    $btnDeleteClient.Add_Click({
+        if ($lvClients.SelectedItems.Count -ne 1) { return }
+        $sel      = $lvClients.SelectedItems[0]
+        $clientId = $sel.Text
+        $confirm  = [System.Windows.Forms.MessageBox]::Show(
+            "Delete client '$clientId'?`n`nAny application authenticating with this clientId/secret will immediately stop working. This cannot be undone.",
+            'Confirm Delete Client',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        $lblDlgStatus.Text = "Deleting client '$clientId'..."; $lblDlgStatus.ForeColor = [System.Drawing.Color]::Gray
+        try {
+            $null = Remove-ServiceAccountClient -ServiceAccountId $ServiceAccountId -ClientId $clientId
+            $null = Update-ClientListView -Lv $lvClients -ServiceAccountId $ServiceAccountId -StatusLabel $lblDlgStatus
+            $btnDeleteClient.Enabled = $false
+        }
+        catch {
+            $lblDlgStatus.Text = "Delete failed: $_"; $lblDlgStatus.ForeColor = [System.Drawing.Color]::Red
+            [System.Windows.Forms.MessageBox]::Show("Error: $_", 'Delete Failed',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+
+    $btnCloseClients.Add_Click({ $dlg.Close() })
+    $dlg.AcceptButton = $btnCloseClients
+
+    $dlg.Controls.AddRange(@(
+        $lblInfo, $lvClients,
+        $btnCreateClient, $btnDeleteClient, $btnRefreshClients, $btnCloseClients,
+        $lblDlgStatus
+    ))
+    $dlg.Add_Shown({ $null = Update-ClientListView -Lv $lvClients -ServiceAccountId $ServiceAccountId -StatusLabel $lblDlgStatus })
+    $null = $dlg.ShowDialog($script:Form)
+    $dlg.Dispose()
+}
+
 #endregion
 
 #region --- Build Form ---
 
 $script:Form = New-Object System.Windows.Forms.Form
-$script:Form.Text            = 'Flexera One — Service Account Manager'
+$script:Form.Text            = 'Flexera One - Service Account Manager'
 $script:Form.Size            = New-Object System.Drawing.Size(780, 700)
 $script:Form.MinimumSize     = New-Object System.Drawing.Size(780, 600)
 $script:Form.StartPosition   = 'CenterScreen'
@@ -591,26 +905,29 @@ $tabs.TabPages.Add($tabBrowse)
 $tabManage      = New-Object System.Windows.Forms.TabPage
 $tabManage.Text = '  Manage Accounts  '
 
-$btnLoadAccounts          = New-Button 'Load Accounts' 10 10 130 26
+$btnLoadAccounts          = New-Button 'Load Accounts' 10 10 110 26
 $txtManageFilter          = New-Object System.Windows.Forms.TextBox
-$txtManageFilter.Location = New-Object System.Drawing.Point(155, 13)
-$txtManageFilter.Size     = New-Object System.Drawing.Size(220, 22)
+$txtManageFilter.Location = New-Object System.Drawing.Point(128, 13)
+$txtManageFilter.Size     = New-Object System.Drawing.Size(150, 22)
 $txtManageFilter.Font     = $FONT_LABEL
 $txtManageFilter.Text     = 'Filter by name...'
 $txtManageFilter.ForeColor= [System.Drawing.Color]::Gray
 
-$btnDeleteSelected          = New-Button 'Delete Selected' 390 10 130 26
+$btnManageClients          = New-Button 'Manage Clients...' 286 10 160 26
+$btnManageClients.Enabled  = $false
+
+$btnDeleteSelected          = New-Button 'Delete Selected' 454 10 130 26
 $btnDeleteSelected.BackColor= [System.Drawing.Color]::FromArgb(180, 40, 40)
 $btnDeleteSelected.Enabled  = $false
 
 $lblManageCount          = New-Object System.Windows.Forms.Label
-$lblManageCount.Location = New-Object System.Drawing.Point(535, 14)
-$lblManageCount.Size     = New-Object System.Drawing.Size(185, 18)
+$lblManageCount.Location = New-Object System.Drawing.Point(592, 14)
+$lblManageCount.Size     = New-Object System.Drawing.Size(128, 18)
 $lblManageCount.Font     = New-Object System.Drawing.Font('Segoe UI', 8)
 $lblManageCount.ForeColor= [System.Drawing.Color]::Gray
 $lblManageCount.Text     = ''
 
-$script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','ID','Subject Ref (iam#)','Subject Ref (API format)','Created By')
+$script:LvManageAccounts = New-ListView 10 46 710 440 @('Name','Credentials','ID','Subject Ref (iam#)','Subject Ref (API format)','Created By')
 $script:LvManageAccounts.MultiSelect    = $true
 $script:LvManageAccounts.HideSelection  = $false
 $script:LvManageAccounts.Anchor         = $AnchorAll
@@ -632,7 +949,7 @@ $null = $ctxManage.Items.Add($mnuCopyName)
 $script:LvManageAccounts.ContextMenuStrip = $ctxManage
 
 $tabManage.Controls.AddRange(@(
-    $btnLoadAccounts, $txtManageFilter, $btnDeleteSelected, $lblManageCount,
+    $btnLoadAccounts, $txtManageFilter, $btnManageClients, $btnDeleteSelected, $lblManageCount,
     $script:LvManageAccounts
 ))
 $tabs.TabPages.Add($tabManage)
@@ -644,7 +961,7 @@ $tabLog         = New-Object System.Windows.Forms.TabPage
 $tabLog.Text    = '  Log  '
 $tabLog.Padding = New-Object System.Windows.Forms.Padding(0)
 
-# Top bar panel — fixed height, stretches horizontally
+# Top bar panel - fixed height, stretches horizontally
 $pnlLogBar          = New-Object System.Windows.Forms.Panel
 $pnlLogBar.Dock     = [System.Windows.Forms.DockStyle]::Top
 $pnlLogBar.Height   = 36
@@ -959,7 +1276,7 @@ $btnView.Add_Click({
     }
 })
 
-# Manage Accounts — filter placeholder behaviour
+# Manage Accounts - filter placeholder behaviour
 $txtManageFilter.Add_GotFocus({
     if ($txtManageFilter.Text -eq 'Filter by name...') {
         $txtManageFilter.Text      = ''
@@ -984,7 +1301,9 @@ $txtManageFilter.Add_TextChanged({
         (Safe-Str $_.name) -like "*$filter*"
     }
     foreach ($sa in $filtered) {
+        $cc = if ($sa.PSObject.Properties['_clientCount']) { $sa._clientCount } else { $null }
         $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
+        $null = $row.SubItems.Add((Format-CredCell $cc))
         $null = $row.SubItems.Add((Safe-Str $sa.id))
         $null = $row.SubItems.Add((Safe-Str $sa.ref))
         $null = $row.SubItems.Add((ConvertTo-GrantRef -IamRef (Safe-Str $sa.ref)))
@@ -995,9 +1314,49 @@ $txtManageFilter.Add_TextChanged({
     foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -2 }
 })
 
-# Enable/disable Delete button based on selection
+# Enable/disable Delete & Manage Clients buttons based on selection
 $script:LvManageAccounts.Add_SelectedIndexChanged({
-    $btnDeleteSelected.Enabled = ($script:LvManageAccounts.SelectedItems.Count -gt 0)
+    $count = $script:LvManageAccounts.SelectedItems.Count
+    $btnDeleteSelected.Enabled = ($count -gt 0)
+    # Client management targets exactly one account
+    $btnManageClients.Enabled  = ($count -eq 1)
+})
+
+# Manage clients (list / create / delete) for the selected service account
+$btnManageClients.Add_Click({
+    if (-not $script:AccessToken) {
+        [System.Windows.Forms.MessageBox]::Show('Please connect first.', 'Not Connected',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $selected = @($script:LvManageAccounts.SelectedItems)
+    if ($selected.Count -ne 1) {
+        [System.Windows.Forms.MessageBox]::Show('Select exactly one service account.', 'Validation',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $item = $selected[0]
+    $sa   = $item.Tag
+    $id   = Safe-Str $sa.id
+    if ($id -eq '') { $id = $item.SubItems[2].Text }   # fall back to ID column
+    $name = Safe-Str $sa.name
+    if ($name -eq '') { $name = $item.Text }
+
+    Write-Log INFO "Manage Clients opened. Account='$name' ID='$id'"
+    Show-ClientManagerDialog -AccountName $name -ServiceAccountId $id
+
+    # Refresh the credential-status cell to reflect any clients created/deleted.
+    try {
+        $n = @(Get-ServiceAccountClients -ServiceAccountId $id).Count
+        $sa | Add-Member -NotePropertyName _clientCount -NotePropertyValue $n -Force
+        $item.SubItems[1].Text = Format-CredCell $n
+        Set-Status "Clients updated for '$name' ($n client(s))." 'Green'
+    }
+    catch {
+        Write-Log WARN "Could not refresh credential status after Manage Clients: $(Get-ApiErrorMessage $_)"
+    }
 })
 
 # Load Accounts
@@ -1023,16 +1382,52 @@ $btnLoadAccounts.Add_Click({
 
         foreach ($sa in $script:AllServiceAccounts) {
             $row = New-Object System.Windows.Forms.ListViewItem((Safe-Str $sa.name))
+            $null = $row.SubItems.Add('...')                                      # Credentials (filled below)
             $null = $row.SubItems.Add((Safe-Str $sa.id))
             $null = $row.SubItems.Add((Safe-Str $sa.ref))
+            $null = $row.SubItems.Add((ConvertTo-GrantRef -IamRef (Safe-Str $sa.ref)))
             $null = $row.SubItems.Add((Safe-Str $sa.createdBy))
             $row.Tag = $sa
             $null = $script:LvManageAccounts.Items.Add($row)
         }
-        foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -1 }
         $lblManageCount.Text = "$($script:AllServiceAccounts.Count) account(s) loaded."
 
-        Set-Status "$($script:AllServiceAccounts.Count) service account(s) loaded." 'Green'
+        # Credential status: the SA object carries no client indicator, so query each
+        # account's clients separately. Defensive - if the clients endpoint errors,
+        # mark unknown ('?') and stop probing so Load still succeeds.
+        $total = $script:LvManageAccounts.Items.Count
+        $credCheckFailed = $false
+        for ($i = 0; $i -lt $total; $i++) {
+            $r      = $script:LvManageAccounts.Items[$i]
+            $row_sa = $r.Tag
+            $sid    = Safe-Str $row_sa.id
+            if ($credCheckFailed -or $sid -eq '') {
+                $row_sa | Add-Member -NotePropertyName _clientCount -NotePropertyValue $null -Force
+                $r.SubItems[1].Text = Format-CredCell $null
+                continue
+            }
+            Set-Status "Checking credential status ($($i + 1)/$total)..." 'Gray'
+            try {
+                $clients = Get-ServiceAccountClients -ServiceAccountId $sid
+                $n = @($clients).Count
+                $row_sa | Add-Member -NotePropertyName _clientCount -NotePropertyValue $n -Force
+                $r.SubItems[1].Text = Format-CredCell $n
+            }
+            catch {
+                $credCheckFailed = $true
+                $row_sa | Add-Member -NotePropertyName _clientCount -NotePropertyValue $null -Force
+                $r.SubItems[1].Text = Format-CredCell $null
+                Write-Log WARN "Credential status check failed (clients endpoint): $(Get-ApiErrorMessage $_)"
+            }
+        }
+
+        foreach ($col in $script:LvManageAccounts.Columns) { $col.Width = -2 }
+
+        if ($credCheckFailed) {
+            Set-Status "$($script:AllServiceAccounts.Count) account(s) loaded. Credential status unavailable - see Log." 'DarkOrange'
+        } else {
+            Set-Status "$($script:AllServiceAccounts.Count) service account(s) loaded." 'Green'
+        }
     }
     catch {
         Set-Status "Failed to load accounts: $_" 'Red'
@@ -1069,7 +1464,7 @@ $btnDeleteSelected.Add_Click({
         $name = Safe-Str $sa.name
 
         # Fall back to text columns if Tag properties are empty (field name mismatch)
-        if ($id -eq '') { $id = $item.SubItems[1].Text }
+        if ($id -eq '') { $id = $item.SubItems[2].Text }
 
         try {
             Remove-ServiceAccount -AccountId $id -AccountName $name
